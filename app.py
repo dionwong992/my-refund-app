@@ -5,17 +5,18 @@ from datetime import datetime
 import io
 import re
 
-st.set_page_config(page_title="退款记录助手-专业版", layout="centered")
-st.title("📱 退款记录 (多项录入)")
+# 1. 页面配置 - 改为 XiuXiu Live
+st.set_page_config(page_title="XiuXiu Live 退款助手", layout="centered", page_icon="📱")
+st.title("✨ XiuXiu Live 退款财务记录")
 
-# 1. 自动连接 GitHub
+# 连接 GitHub
 try:
     token = st.secrets["GITHUB_TOKEN"]
     repo_name = st.secrets["REPO_NAME"]
     g = Github(token)
     repo = g.get_repo(repo_name)
 except:
-    st.error("配置错误，请检查 Secrets 是否填对")
+    st.error("配置错误，请检查 Secrets")
     st.stop()
 
 # 2. 录入界面
@@ -23,31 +24,30 @@ with st.form("my_form", clear_on_submit=True):
     inv = st.text_input("Invoice 号码")
     cust = st.text_input("顾客姓名")
     
-    st.info("💡 输入说明：\n每行一个产品，格式为：**产品名称 + 空格 + 金额**\n例如：\n苹果 10\n香蕉 25.5")
+    st.info("💡 格式：产品名称 + 金额 (支持 RM)\n例如：T435大码宽衣 RM16.66")
     items_text = st.text_area("货物清单及金额", height=150)
     
-    submitted = st.form_submit_button("🚀 自动计算总额并保存", use_container_width=True)
+    submitted = st.form_submit_button("🚀 自动计算并保存到 XiuXiu 记录", use_container_width=True)
 
     if submitted:
         if inv and cust and items_text:
-            # 读取当前 data.csv
             file = repo.get_contents("data.csv")
             df = pd.read_csv(io.StringIO(file.decoded_content.decode()))
             
-            # 解析多行输入
             new_rows = []
             current_total = 0
             lines = items_text.strip().split('\n')
             
             for line in lines:
-                # 寻找每一行末尾的数字作为金额
-                parts = re.findall(r'(.+)\s+([\d.]+)', line)
+                # 增强匹配：自动识别 RM 和金额
+                parts = re.findall(r'(.+?)\s*(?:RM)?\s*([\d.]+)', line, re.IGNORECASE)
                 if parts:
                     p_name, p_amt = parts[0]
                     p_amt = float(p_amt)
                     current_total += p_amt
                     new_rows.append({
-                        '日期': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        '日期': datetime.now().strftime("%Y-%m-%d"),
+                        '时间': datetime.now().strftime("%H:%M"),
                         'Invoice': inv,
                         '客户': cust,
                         '货物': p_name.strip(),
@@ -57,31 +57,53 @@ with st.form("my_form", clear_on_submit=True):
             if new_rows:
                 new_df = pd.DataFrame(new_rows)
                 updated_df = pd.concat([df, new_df], ignore_index=True)
-                # 推送回 GitHub
-                repo.update_file(file.path, f"Update {inv}", updated_df.to_csv(index=False), file.sha)
-                st.success(f"✅ 保存成功！本单总计: ${current_total:.2f}")
-                st.balloons() # 撒花庆祝
+                repo.update_file(file.path, f"XiuXiu Update {inv}", updated_df.to_csv(index=False), file.sha)
+                st.success(f"✅ 保存成功！本单总计: RM {current_total:.2f}")
+                st.balloons()
                 st.rerun()
-        else:
-            st.warning("请填好 Invoice、姓名和货品清单")
 
-# 3. 统计功能
+# 3. 统计汇总区域
 try:
     file = repo.get_contents("data.csv")
     show_df = pd.read_csv(io.StringIO(file.decoded_content.decode()))
     
     if not show_df.empty:
+        show_df['金额'] = pd.to_numeric(show_df['金额'])
+        
         st.divider()
-        st.subheader("📊 历史记录与统计")
-        
-        # 选人看总额
-        all_customers = ["全部顾客"] + list(show_df['客户'].unique())
-        selected_cust = st.selectbox("筛选顾客查看总退款:", all_customers)
-        
-        if selected_cust != "全部顾客":
-            cust_total = show_df[show_df['客户'] == selected_cust]['金额'].sum()
-            st.metric(label=f"{selected_cust} 的累计退款总额", value=f"${cust_total:.2f}")
-        
-        st.dataframe(show_df.sort_index(ascending=False), use_container_width=True)
-except:
-    st.info("正在加载历史数据...")
+        tab1, tab2, tab3 = st.tabs(["📅 每日汇总", "👤 顾客对账", "📜 全部记录"])
+
+        with tab1:
+            st.subheader("📅 XiuXiu Live 每日汇总")
+            daily_summary = show_df.groupby('日期')['金额'].sum().reset_index()
+            daily_summary = daily_summary.sort_values('日期', ascending=False)
+            
+            for _, row in daily_summary.iterrows():
+                col1, col2 = st.columns([2, 1])
+                col1.markdown(f"**{row['日期']}**")
+                col2.markdown(f"**RM {row['金额']:.2f}**")
+                st.divider()
+
+        with tab2:
+            st.subheader("👤 顾客累计金额")
+            all_customers = sorted(show_df['客户'].unique())
+            selected_cust = st.selectbox("选择要查询的 XiuXiu 粉丝:", ["-- 请选择 --"] + list(all_customers))
+            
+            if selected_cust != "-- 请选择 --":
+                cust_df = show_df[show_df['客户'] == selected_cust]
+                total_sum = cust_df['金额'].sum()
+                st.metric(label=f"{selected_cust} 累计退款总额", value=f"RM {total_sum:.2f}")
+                
+                st.write("📋 消费退款明细：")
+                cust_display = cust_df[['日期', 'Invoice', '货物', '金额']].copy()
+                cust_display['金额'] = cust_display['金额'].map(lambda x: f"RM {x:.2f}")
+                st.table(cust_display)
+
+        with tab3:
+            st.subheader("📜 完整记录存档")
+            final_df = show_df.copy()
+            final_df['金额'] = final_df['金额'].map(lambda x: f"RM {x:.2f}")
+            st.dataframe(final_df.sort_index(ascending=False), use_container_width=True)
+
+except Exception as e:
+    st.info("XiuXiu Live 数据加载中...")
