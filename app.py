@@ -3,22 +3,27 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# 手机版适配
-st.set_page_config(page_title="退款助手(云端版)", layout="centered")
+# 页面配置
+st.set_page_config(page_title="退货记录助手", layout="centered")
 
-st.title("📱 永久记录器")
+st.title("📱 退货记录助手")
 
-# 连接 Google Sheets
+# --- 核心连接部分 (就是你截图里问的地方) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 读取现有数据
 try:
-    df = conn.read()
-except:
+    # ttl=0 强制每次都从 Google 读取最新数据，不使用缓存
+    df = conn.read(ttl=0)
+except Exception:
+    # 如果读取失败（比如表格完全是空的），手动建立结构
     df = pd.DataFrame(columns=['日期', 'Invoice', '客户', '货物', '金额'])
 
-# 录入表单
-with st.form("refund_form", clear_on_submit=True):
+# 确保金额是数字，防止报错
+if not df.empty:
+    df['金额'] = pd.to_numeric(df['金额'], errors='coerce').fillna(0)
+
+# --- 输入表单 ---
+with st.form("input_form", clear_on_submit=True):
     st.subheader("📝 录入新记录")
     inv = st.text_input("Invoice 号码")
     cust = st.text_input("顾客姓名")
@@ -34,11 +39,15 @@ with st.form("refund_form", clear_on_submit=True):
                 '货物': prod,
                 '金额': amt
             }])
+            # 把新数据加到旧数据后面
             updated_df = pd.concat([df, new_row], ignore_index=True)
+            # 写入 Google Sheets
             conn.update(data=updated_df)
-            st.success("✅ 已存入 Google Sheets！")
+            st.success("✅ 已同步到 Google Sheets！")
             st.rerun()
+        else:
+            st.warning("请填好 Invoice 和姓名")
 
-# 历史预览
+# --- 显示历史 ---
 with st.expander("📂 查看已保存记录"):
     st.dataframe(df.sort_index(ascending=False), use_container_width=True)
