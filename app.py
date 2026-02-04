@@ -4,9 +4,15 @@ from github import Github
 from datetime import datetime
 import io
 import re
+import pytz  # 导入时区处理工具
 
 # 1. 页面配置
-st.set_page_config(page_title="XiuXiu Live 终极对账助手", layout="centered", page_icon="💰")
+st.set_page_config(page_title="XiuXiu Live 终极财务助手", layout="centered", page_icon="💰")
+
+# 定义马来西亚时区函数
+def get_malaysia_time():
+    kl_tz = pytz.timezone('Asia/Kuala_Lumpur')
+    return datetime.now(kl_tz)
 
 # --- 简单密码保护 ---
 def check_password():
@@ -16,7 +22,7 @@ def check_password():
     if not st.session_state.authenticated:
         st.title("✨ XiuXiu Live 财务系统")
         pwd = st.text_input("请输入专属口令进入:", type="password")
-        if pwd == "xiuxiu888": # 你可以在这里修改你的密码
+        if pwd == "xiuxiu888": 
             st.session_state.authenticated = True
             st.rerun()
         elif pwd:
@@ -53,9 +59,8 @@ if check_password():
                 file = repo.get_contents("data.csv")
                 df = pd.read_csv(io.StringIO(file.decoded_content.decode()))
                 
-                # 防止重复提交校验
-                if not df.empty and inv in df['Invoice'].values and cust in df['客户'].values:
-                    st.warning("⚠️ 发现该 Invoice 已有记录，请确认是否重复录入？")
+                # 获取马来西亚当前时间
+                now_kl = get_malaysia_time()
                 
                 new_rows = []
                 current_total = 0
@@ -67,7 +72,8 @@ if check_password():
                         p_amt = float(p_amt)
                         current_total += p_amt
                         new_rows.append({
-                            '日期': datetime.now().strftime("%Y-%m-%d"),
+                            '日期': now_kl.strftime("%Y-%m-%d"),
+                            '时间': now_kl.strftime("%H:%M"),
                             'Invoice': inv,
                             '客户': cust,
                             '货物': p_name.strip(),
@@ -93,7 +99,7 @@ if check_password():
             tab1, tab2, tab3 = st.tabs(["📊 财务分析", "🔍 模糊搜索", "📑 下载报表"])
 
             with tab1:
-                st.subheader("📅 日期汇总")
+                st.subheader("📅 马来西亚日期汇总")
                 daily = show_df.groupby('日期')['金额'].sum().reset_index().sort_values('日期', ascending=False)
                 for _, row in daily.iterrows():
                     st.write(f"📅 {row['日期']} --- **RM {row['金额']:.2f}**")
@@ -108,8 +114,8 @@ if check_password():
             with tab2:
                 search_q = st.text_input("🔍 输入名字或 Invoice 搜索:")
                 if search_q:
-                    res = show_df[show_df['客户'].str.contains(search_q, na=False) | 
-                                  show_df['Invoice'].str.contains(search_q, na=False)]
+                    res = show_df[show_df['客户'].str.contains(search_q, na=False, case=False) | 
+                                  show_df['Invoice'].str.contains(search_q, na=False, case=False)]
                     st.dataframe(res)
                 else:
                     st.dataframe(show_df.sort_index(ascending=False))
@@ -120,9 +126,8 @@ if check_password():
                 st.download_button(
                     label="点击下载 Excel (CSV) 格式",
                     data=csv,
-                    file_name=f'XiuXiu_Refund_{datetime.now().strftime("%Y%m%d")}.csv',
+                    file_name=f'XiuXiu_Refund_{get_malaysia_time().strftime("%Y%m%d")}.csv',
                     mime='text/csv',
                 )
-                st.info("提示：CSV文件可以用 Excel 直接打开。")
     except:
-        st.info("数据准备中...")
+        st.info("数据加载中...")
