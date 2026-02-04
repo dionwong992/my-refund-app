@@ -7,14 +7,13 @@ import re
 import pytz
 
 # 1. 页面配置
-st.set_page_config(page_title="XiuXiu Live 退款助手", layout="centered", page_icon="💰")
+st.set_page_config(page_title="XiuXiu Live 退款助手-标准版", layout="centered", page_icon="💰")
 
-# 获取马来西亚时间
 def get_kl_time():
     kl_tz = pytz.timezone('Asia/Kuala_Lumpur')
     return datetime.now(kl_tz)
 
-# --- 简单密码保护 ---
+# --- 登录系统 ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
@@ -41,13 +40,12 @@ with st.form("my_form", clear_on_submit=True):
     cust = col_b.text_input("顾客姓名")
     
     status = st.selectbox("当前状态", ["Pending (待处理)", "Done (已退款)", "Exchange (已换货)"])
-    items_text = st.text_area("清单 (产品 RM10)", height=120)
+    items_text = st.text_area("清单 (产品 RM10)", height=100)
     
     submitted = st.form_submit_button("🚀 保存记录", use_container_width=True)
 
     if submitted:
         if inv and cust and items_text:
-            # 这里的读取是必须的，但 2.0 逻辑更轻量
             file = repo.get_contents("data.csv")
             df = pd.read_csv(io.StringIO(file.decoded_content.decode()))
             
@@ -77,15 +75,14 @@ with st.form("my_form", clear_on_submit=True):
                 st.success(f"✅ 已保存！总计: RM {this_total:.2f}")
                 st.rerun()
 
-# 4. 统计与查询 (2.0 轻量版)
+# 4. 统计与查询
 try:
-    # 这一步只在页面加载或刷新时运行一次
     file = repo.get_contents("data.csv")
     show_df = pd.read_csv(io.StringIO(file.decoded_content.decode()))
     
     if not show_df.empty:
         st.divider()
-        tab1, tab2, tab3 = st.tabs(["📅 日期汇总", "🔍 搜索/对账", "📥 下载"])
+        tab1, tab2, tab3 = st.tabs(["📅 日期汇总", "🔍 搜索/删除", "📥 下载"])
 
         with tab1:
             st.subheader("📅 每日退款汇总")
@@ -94,16 +91,33 @@ try:
                 st.write(f"📅 {row['日期']} --- **RM {row['金额']:.2f}**")
 
         with tab2:
-            search_q = st.text_input("🔍 输入名字或 Invoice:")
+            st.subheader("🔍 记录管理")
+            search_q = st.text_input("输入名字或 Invoice 查询:")
+            
+            # 过滤数据
             if search_q:
-                res = show_df[show_df['客户'].str.contains(search_q, na=False, case=False) | 
-                              show_df['Invoice'].str.contains(search_q, na=False, case=False)]
-                st.dataframe(res, use_container_width=True)
+                display_df = show_df[show_df['客户'].str.contains(search_q, na=False, case=False) | 
+                                     show_df['Invoice'].str.contains(search_q, na=False, case=False)]
             else:
-                st.dataframe(show_df.sort_index(ascending=False), use_container_width=True)
+                display_df = show_df.copy()
+
+            # 显示带删除按钮的列表
+            for i, row in display_df.sort_index(ascending=False).iterrows():
+                with st.expander(f"📌 {row['日期']} | {row['客户']} | RM {row['金额']}"):
+                    st.write(f"Invoice: {row['Invoice']}")
+                    st.write(f"产品: {row['货物']}")
+                    st.write(f"状态: {row['状态']}")
+                    
+                    # 删除按钮
+                    if st.button(f"🗑️ 删除此条记录", key=f"del_{i}"):
+                        # 执行删除逻辑
+                        new_df = show_df.drop(i)
+                        repo.update_file(file.path, "Delete record", new_df.to_csv(index=False), file.sha)
+                        st.error("⚠️ 记录已删除！")
+                        st.rerun()
 
         with tab3:
             csv = show_df.to_csv(index=False).encode('utf-8-sig')
             st.download_button("📥 下载 Excel (CSV)", csv, f"XiuXiu_{get_kl_time().strftime('%Y%m%d')}.csv", "text/csv")
 except:
-    st.info("同步中...")
+    st.info("数据同步中...")
