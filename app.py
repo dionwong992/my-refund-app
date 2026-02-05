@@ -7,7 +7,7 @@ import re
 import pytz
 
 # --- 1. 页面配置 ---
-st.set_page_config(page_title="XiuXiu Live 增强版", layout="centered", page_icon="💰")
+st.set_page_config(page_title="XiuXiu Live 财务增强版", layout="centered", page_icon="💰")
 
 def get_kl_time():
     kl_tz = pytz.timezone('Asia/Kuala_Lumpur')
@@ -44,25 +44,29 @@ def fetch_data():
         return pd.DataFrame(columns=['日期', '时间', 'Invoice', '客户', '货物', '金额', '状态']), None
 
 # --- 5. 录入界面 ---
-st.title("📱 XiuXiu Live 智能录入系统")
+st.title("📱 XiuXiu Live 智能财务系统")
 
 with st.form("my_form", clear_on_submit=True):
     col_a, col_b = st.columns(2)
     inv = col_a.text_input("Invoice 号码")
     cust = col_b.text_input("顾客姓名")
+    
+    # 🚨 退款模式开关：针对你提到的“全部都是退款”的情况
+    is_refund_mode = st.toggle("🚨 开启【全单退款】模式", value=False, help="开启后，即使你粘贴的文字是正数，系统也会自动按退款（负数）处理")
+    
     status = st.selectbox("当前状态", [
+        "Done (已完成/已退款)", 
         "Pending (待处理)", 
-        "Done (已完成/退款)", 
         "Exchange (已换货)", 
         "Rebate (回扣)",
         "Overpaid (多汇款退回)"
     ])
     
-    st.markdown("##### 💡 智能录入说明:")
-    st.caption("系统会自动计算正负号。例如：`退款 RM50` 或 `rm10 多汇` 会自动识别为扣款。")
-    items_text = st.text_area("清单录入 (每行一个)", height=150, placeholder="商品A 35\n退款 50\nrm10 多汇\n东西损坏退 5")
+    st.markdown("##### 💡 清单录入:")
+    st.caption("支持直接粘贴：`T501 KElTIS家休闲百搭短裤 RM24.88 西马包邮(黑)`")
+    items_text = st.text_area("在此粘贴清单 (每行一个)", height=200)
     
-    submit_button = st.form_submit_button("🚀 自动计算并保存到 GitHub", use_container_width=True)
+    submit_button = st.form_submit_button("🚀 自动计算并存入数据库", use_container_width=True)
 
 if submit_button:
     if inv and cust and items_text:
@@ -70,15 +74,13 @@ if submit_button:
             df, file_sha = fetch_data()
             now_kl = get_kl_time()
             new_rows = []
-            final_net_total = 0 # 用于计算这一单最后的盈亏
+            this_batch_total = 0 
             
             for line in items_text.strip().split('\n'):
                 line = line.strip()
                 if not line: continue
                 
-                # --- 智能正则解析 ---
-                # 模式1: 金额在后 (商品 35)
-                # 模式2: 金额在前 (RM50 退款)
+                # --- 强大的正则解析：支持金额在中间或前后的长句子 ---
                 p_back = r'^(.*?)\s+(?:RM|rm)?\s*(-?[\d.]+)(.*)$'
                 p_front = r'^(?:RM|rm)?\s*(-?[\d.]+)\s*(.*)$'
                 
@@ -95,22 +97,19 @@ if submit_button:
                     if m_front:
                         amt, desc = m_front.groups()
                         amt_val = float(amt)
-                        item_desc = desc.strip() if desc.strip() else "手工项"
+                        item_desc = desc.strip() if desc.strip() else "手工项目"
                     else:
-                        st.warning(f"无法解析该行，请检查格式: {line}")
+                        st.warning(f"解析失败，请检查格式: {line}")
                         continue
 
-                # --- 核心：系统自动识别正负号 ---
-                # 负面关键词库
-                neg_keywords = ["退", "多", "损", "坏", "扣", "赔", "refund", "overpaid", "回扣"]
+                # --- 智能负数转换逻辑 ---
+                # 触发条件：开启了退款模式，或者描述中包含退款关键词
+                neg_keywords = ["退", "多", "损", "坏", "扣", "赔", "overpaid", "refund"]
+                if is_refund_mode or any(kw in item_desc for kw in neg_keywords):
+                    if amt_val > 0:
+                        amt_val = -amt_val
                 
-                # 如果描述包含关键词且金额还没被写成负数，则自动转负
-                if any(kw in item_desc for kw in neg_keywords) and amt_val > 0:
-                    amt_val = -amt_val
-                
-                # 累加这一单的总额
-                final_net_total += amt_val
-                
+                this_batch_total += amt_val
                 new_rows.append({
                     '日期': now_kl.strftime("%Y-%m-%d"), 
                     '时间': now_kl.strftime("%H:%M"), 
@@ -125,70 +124,76 @@ if submit_button:
                 updated_df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
                 repo.update_file("data.csv", f"Update {inv}", updated_df.to_csv(index=False, encoding='utf-8-sig'), file_sha)
                 
-                # 根据最终结果弹出不同颜色的提示
-                if final_net_total > 0:
-                    st.success(f"✅ 保存成功！此单需收客户：RM {final_net_total:.2f}")
-                elif final_net_total < 0:
-                    st.warning(f"✅ 保存成功！此单需退回客户：RM {abs(final_net_total):.2f}")
+                # 反馈结果
+                if this_batch_total < 0:
+                    st.warning(f"✅ 录入成功！这笔单子共计退款：RM {abs(this_batch_total):.2f}")
                 else:
-                    st.info(f"✅ 保存成功！此单收支抵消为 0")
+                    st.success(f"✅ 录入成功！这笔单子共计收入：RM {this_batch_total:.2f}")
                 
                 st.cache_data.clear()
                 st.rerun()
         except Exception as e:
             st.error(f"同步失败: {e}")
     else:
-        st.warning("⚠️ 请填好单号、姓名和清单！")
+        st.warning("⚠️ 请输入完整信息！")
 
-# --- 6. 展示与管理区 ---
+# --- 6. 财务看板区 ---
 st.divider()
 try:
     show_df, current_sha = fetch_data()
     if not show_df.empty:
-        tab1, tab2, tab3 = st.tabs(["📅 今日财务", "🔍 历史记录", "📥 管理/导出"])
+        tab1, tab2, tab3 = st.tabs(["📅 今日对账", "🔍 历史搜索", "📥 导出/删除"])
 
         with tab1:
             today_str = get_kl_time().strftime("%Y-%m-%d")
             today_data = show_df[show_df['日期'] == today_str]
             
-            st.subheader(f"📅 今日对账 ({today_str})")
+            st.subheader(f"📊 今日统计 ({today_str})")
             if not today_data.empty:
+                # 区分收入与退款
                 in_amt = today_data[today_data['金额'] > 0]['金额'].sum()
                 out_amt = today_data[today_data['金额'] < 0]['金额'].sum()
+                net_amt = in_amt + out_amt
                 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("总入账 (In)", f"RM {in_amt:.2f}")
-                c2.metric("总退款/多汇 (Out)", f"RM {abs(out_amt):.2f}")
-                c3.metric("今日净收", f"RM {in_amt + out_amt:.2f}")
+                c1.metric("总入账 (销售)", f"RM {in_amt:.2f}")
+                c2.metric("总退款 (支出)", f"RM {abs(out_amt):.2f}", delta=f"-{abs(out_amt):.2f}", delta_color="inverse")
+                c3.metric("今日净收 (实收)", f"RM {net_amt:.2f}")
                 
                 st.write("---")
-                st.dataframe(today_data.sort_index(ascending=False), use_container_width=True)
+                # 自动为退款金额上色（红色）
+                def color_negative(val):
+                    color = 'red' if val < 0 else 'black'
+                    return f'color: {color}'
+                
+                st.dataframe(
+                    today_data.sort_index(ascending=False).style.applymap(color_negative, subset=['金额']), 
+                    use_container_width=True
+                )
             else:
-                st.info("今天还没有录入数据哦。")
+                st.info("今日暂无录入数据。")
 
         with tab2:
-            search_q = st.text_input("🔍 全局搜索:")
-            res = show_df.copy()
+            search_q = st.text_input("🔍 搜索任意内容:")
             if search_q:
-                mask = res.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)
-                res = res[mask]
-            st.dataframe(res.sort_index(ascending=False), use_container_width=True)
+                mask = show_df.apply(lambda row: row.astype(str).str.contains(search_q, case=False).any(), axis=1)
+                st.dataframe(show_df[mask].sort_index(ascending=False), use_container_width=True)
+            else:
+                st.dataframe(show_df.sort_index(ascending=False).head(50), use_container_width=True)
 
         with tab3:
-            st.subheader("⚙️ 导出与删除")
             csv_data = show_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 下载完整 CSV 表格", csv_data, f"XiuXiu_Live_{get_kl_time().strftime('%Y%m%d')}.csv", "text/csv")
+            st.download_button("📥 下载 CSV 报表", csv_data, f"Report_{today_str}.csv", "text/csv")
             
-            if st.checkbox("🛠️ 开启删除模式"):
-                for i in reversed(show_df.index[-15:]):
+            st.write("---")
+            if st.checkbox("🛠️ 危险操作：开启删除模式"):
+                for i in reversed(show_df.index[-10:]):
                     row = show_df.iloc[i]
-                    with st.expander(f"🗑️ {row['日期']} | {row['客户']} - {row['货物']} (RM{row['金额']})"):
-                        if st.button(f"删除记录", key=f"del_{i}"):
-                            new_df = show_df.drop(i)
-                            repo.update_file("data.csv", "Delete", new_df.to_csv(index=False, encoding='utf-8-sig'), current_sha)
-                            st.cache_data.clear()
-                            st.rerun()
-    else:
-        st.info("💡 库里空空如也，快去录入数据吧！")
+                    if st.button(f"🗑️ 删除: {row['客户']} - {row['货物']} (RM{row['金额']})", key=f"d_{i}"):
+                        new_df = show_df.drop(i)
+                        repo.update_file("data.csv", "Delete", new_df.to_csv(index=False, encoding='utf-8-sig'), current_sha)
+                        st.cache_data.clear()
+                        st.rerun()
 except Exception:
-    st.info("正在连接 GitHub 数据库...")
+    st.info("数据连接中...")
+
